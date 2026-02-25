@@ -22,6 +22,13 @@ defmodule Jido.MCP.Config do
     end
   end
 
+  @spec endpoint_ids() :: [atom()]
+  def endpoint_ids do
+    endpoints()
+    |> Map.keys()
+    |> Enum.sort()
+  end
+
   @spec normalize_endpoints(map() | keyword()) :: endpoints()
   def normalize_endpoints(endpoints) when is_list(endpoints) do
     endpoints
@@ -31,7 +38,7 @@ defmodule Jido.MCP.Config do
 
   def normalize_endpoints(endpoints) when is_map(endpoints) do
     Enum.reduce(endpoints, %{}, fn {id, attrs}, acc ->
-      id = normalize_id(id)
+      id = normalize_id!(id)
 
       case Endpoint.new(id, attrs) do
         {:ok, endpoint} ->
@@ -45,6 +52,9 @@ defmodule Jido.MCP.Config do
 
   def normalize_endpoints(_), do: %{}
 
-  defp normalize_id(id) when is_atom(id), do: id
-  defp normalize_id(id) when is_binary(id), do: String.to_atom(id)
+  defp normalize_id!(id) when is_atom(id), do: id
+
+  defp normalize_id!(id) do
+    raise ArgumentError, "Invalid endpoint id #{inspect(id)}: endpoint keys must be atoms"
+  end
 end

@@ -57,6 +57,11 @@ defmodule Jido.MCP.Server.Runtime do
 
       {:error, :unauthorized} ->
         {:error, Error.protocol(:invalid_request, %{message: "Unauthorized tool call"}), frame}
+
+      {:error, {:authorization_failed, reason}} ->
+        {:error,
+         Error.execution("Authorization callback failed", %{reason: inspect(reason), name: name}),
+         frame}
     end
   end
 
@@ -66,12 +71,23 @@ defmodule Jido.MCP.Server.Runtime do
       when is_list(resource_modules) and is_binary(uri) do
     with :ok <- authorize(server_module, %{type: :resource_read, uri: uri}, frame),
          {:ok, module} <- find_resource(resource_modules, uri) do
-      case module.read(uri, frame) do
-        {:ok, content} ->
+      case safe_invoke(fn -> module.read(uri, frame) end) do
+        {:ok, {:ok, content}} ->
           {:reply, resource_response(content), frame}
 
-        {:error, reason} ->
+        {:ok, {:error, reason}} ->
           {:error, Error.resource(:not_found, %{message: inspect(reason), uri: uri}), frame}
+
+        {:ok, other} ->
+          {:error,
+           Error.execution("Resource reader returned invalid response", %{
+             uri: uri,
+             response: inspect(other)
+           }), frame}
+
+        {:error, reason} ->
+          {:error, Error.execution("Resource read failed", %{reason: inspect(reason), uri: uri}),
+           frame}
       end
     else
       {:error, :not_found} ->
@@ -80,6 +96,11 @@ defmodule Jido.MCP.Server.Runtime do
 
       {:error, :unauthorized} ->
         {:error, Error.protocol(:invalid_request, %{message: "Unauthorized resource read"}),
+         frame}
+
+      {:error, {:authorization_failed, reason}} ->
+        {:error,
+         Error.execution("Authorization callback failed", %{reason: inspect(reason), uri: uri}),
          frame}
     end
   end
@@ -91,12 +112,24 @@ defmodule Jido.MCP.Server.Runtime do
     with :ok <-
            authorize(server_module, %{type: :prompt_get, name: name, arguments: arguments}, frame),
          {:ok, module} <- find_prompt(prompt_modules, name) do
-      case module.messages(arguments, frame) do
-        {:ok, messages} when is_list(messages) ->
+      case safe_invoke(fn -> module.messages(arguments, frame) end) do
+        {:ok, {:ok, messages}} when is_list(messages) ->
           {:reply, prompt_response(messages), frame}
 
-        {:error, reason} ->
+        {:ok, {:error, reason}} ->
           {:error, Error.execution("Prompt rendering failed", %{reason: inspect(reason)}), frame}
+
+        {:ok, other} ->
+          {:error,
+           Error.execution("Prompt provider returned invalid response", %{
+             name: name,
+             response: inspect(other)
+           }), frame}
+
+        {:error, reason} ->
+          {:error,
+           Error.execution("Prompt rendering failed", %{name: name, reason: inspect(reason)}),
+           frame}
       end
     else
       {:error, :not_found} ->
@@ -104,6 +137,11 @@ defmodule Jido.MCP.Server.Runtime do
 
       {:error, :unauthorized} ->
         {:error, Error.protocol(:invalid_request, %{message: "Unauthorized prompt access"}),
+         frame}
+
+      {:error, {:authorization_failed, reason}} ->
+        {:error,
+         Error.execution("Authorization callback failed", %{reason: inspect(reason), name: name}),
          frame}
     end
   end
@@ -174,38 +212,12 @@ defmodule Jido.MCP.Server.Runtime do
   end
 
   defp action_input_schema(module) do
-    schema = module.schema()
-
-    if is_list(schema) and Keyword.keyword?(schema) do
-      Enum.reduce(schema, %{}, fn {field, opts}, acc ->
-        map_type = normalize_field_type(Keyword.get(opts, :type))
-        required? = Keyword.get(opts, :required, false)
-        description = Keyword.get(opts, :doc)
-
-        value =
-          if required? do
-            {:required, map_type, description: description}
-          else
-            {map_type, description: description}
-          end
-
-        Map.put(acc, field, value)
-      end)
-    else
-      %{}
-    end
+    module
+    |> apply(:schema, [])
+    |> Jido.Action.Schema.to_json_schema()
   rescue
-    _ -> %{}
+    _ -> %{"type" => "object", "properties" => %{}, "required" => []}
   end
-
-  defp normalize_field_type(:string), do: :string
-  defp normalize_field_type(:integer), do: :integer
-  defp normalize_field_type(:float), do: :number
-  defp normalize_field_type(:number), do: :number
-  defp normalize_field_type(:boolean), do: :boolean
-  defp normalize_field_type(:map), do: :map
-  defp normalize_field_type({:list, _}), do: :list
-  defp normalize_field_type(_), do: :any
 
   defp maybe_description(module) do
     if function_exported?(module, :description, 0), do: module.description(), else: nil
@@ -213,13 +225,24 @@ defmodule Jido.MCP.Server.Runtime do
 
   defp authorize(server_module, request, frame) do
     if function_exported?(server_module, :authorize, 2) do
-      case server_module.authorize(request, frame) do
-        :ok -> :ok
-        true -> :ok
-        _ -> {:error, :unauthorized}
+      case safe_invoke(fn -> server_module.authorize(request, frame) end) do
+        {:ok, :ok} -> :ok
+        {:ok, true} -> :ok
+        {:ok, _} -> {:error, :unauthorized}
+        {:error, reason} -> {:error, {:authorization_failed, reason}}
       end
     else
       :ok
     end
+  end
+
+  defp safe_invoke(fun) when is_function(fun, 0) do
+    {:ok, fun.()}
+  rescue
+    exception ->
+      {:error, {:exception, Exception.message(exception)}}
+  catch
+    kind, value ->
+      {:error, {kind, value}}
   end
 end

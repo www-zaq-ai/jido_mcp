@@ -12,6 +12,8 @@ defmodule Jido.MCP.Plugins.MCP do
   Plugin exposing MCP consume-side routes (tools/resources/prompts/endpoints).
   """
 
+  alias Jido.MCP.{Config, EndpointID}
+
   use Jido.Plugin,
     name: "mcp",
     state_key: :mcp,
@@ -28,15 +30,19 @@ defmodule Jido.MCP.Plugins.MCP do
     description: "Model Context Protocol integration",
     category: "mcp",
     tags: ["mcp", "tools", "resources", "prompts"],
-    vsn: "0.1.0"
+    vsn: to_string(Application.spec(:jido_mcp, :vsn) || "0.1.1")
 
   @impl Jido.Plugin
   def mount(_agent, config) do
-    {:ok,
-     %{
-       default_endpoint: Map.get(config, :default_endpoint),
-       allowed_endpoints: normalize_allowed_endpoints(Map.get(config, :allowed_endpoints))
-     }}
+    with {:ok, default_endpoint} <- normalize_default_endpoint(Map.get(config, :default_endpoint)),
+         {:ok, allowed_endpoints} <-
+           normalize_allowed_endpoints(Map.get(config, :allowed_endpoints)) do
+      {:ok,
+       %{
+         default_endpoint: default_endpoint,
+         allowed_endpoints: allowed_endpoints
+       }}
+    end
   end
 
   @impl Jido.Plugin
@@ -59,14 +65,25 @@ defmodule Jido.MCP.Plugins.MCP do
   @impl Jido.Plugin
   def transform_result(_action, result, _context), do: result
 
-  defp normalize_allowed_endpoints(nil), do: nil
+  defp normalize_default_endpoint(nil), do: {:ok, nil}
+  defp normalize_default_endpoint(value), do: EndpointID.resolve(value)
 
   defp normalize_allowed_endpoints(values) when is_list(values) do
-    Enum.map(values, fn
-      value when is_atom(value) -> value
-      value when is_binary(value) -> String.to_atom(value)
+    endpoints = Config.endpoints()
+
+    values
+    |> Enum.reduce_while({:ok, []}, fn value, {:ok, acc} ->
+      case EndpointID.resolve(value, endpoints) do
+        {:ok, endpoint_id} -> {:cont, {:ok, [endpoint_id | acc]}}
+        {:error, reason} -> {:halt, {:error, {:invalid_allowed_endpoints, reason}}}
+      end
     end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      error -> error
+    end
   end
 
-  defp normalize_allowed_endpoints(_), do: nil
+  defp normalize_allowed_endpoints(nil), do: {:ok, nil}
+  defp normalize_allowed_endpoints(_), do: {:error, {:invalid_allowed_endpoints, :invalid_type}}
 end

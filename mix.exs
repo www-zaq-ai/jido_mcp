@@ -13,6 +13,7 @@ defmodule JidoMcp.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
+      test_coverage: [summary: [threshold: 85]],
 
       # Documentation
       name: "Jido MCP",
@@ -27,6 +28,10 @@ defmodule JidoMcp.MixProject do
   def application do
     [
       extra_applications: [:logger],
+      env: [
+        version: @version,
+        jido_ai_sync: [max_tools_per_sync: 100, max_proxy_modules_per_endpoint: 200]
+      ],
       mod: {Jido.MCP.Application, []}
     ]
   end

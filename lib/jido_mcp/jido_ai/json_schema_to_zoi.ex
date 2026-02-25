@@ -22,7 +22,7 @@ defmodule Jido.MCP.JidoAI.JSONSchemaToZoi do
     if is_map(properties) do
       fields =
         Enum.map(properties, fn {name, value_schema} ->
-          key = safe_to_atom(name)
+          key = safe_field_name(name)
           required? = MapSet.member?(required, name)
           {key, field_schema(value_schema, required?)}
         end)
@@ -86,13 +86,12 @@ defmodule Jido.MCP.JidoAI.JSONSchemaToZoi do
     end
   end
 
-  defp safe_to_atom(name) when is_binary(name) do
-    name
-    |> String.trim()
-    |> String.replace(~r/[^a-zA-Z0-9_]/u, "_")
-    |> then(fn
-      "" -> :value
-      normalized -> String.to_atom(normalized)
-    end)
+  defp safe_field_name(name) when is_binary(name) do
+    case String.trim(name) do
+      "" -> "value"
+      normalized -> normalized
+    end
   end
+
+  defp safe_field_name(_), do: "value"
 end

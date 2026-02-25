@@ -35,7 +35,11 @@ defmodule Jido.MCP.Server do
   defmacro __using__(opts) do
     name = Keyword.fetch!(opts, :name)
     version = Keyword.fetch!(opts, :version)
-    publish = Keyword.get(opts, :publish, %{})
+
+    publish =
+      opts
+      |> Keyword.get(:publish, %{})
+      |> eval_publish_map!(__CALLER__)
 
     tools = Map.get(publish, :tools, [])
     resources = Map.get(publish, :resources, [])
@@ -121,5 +125,21 @@ defmodule Jido.MCP.Server do
 
       defoverridable authorize: 2
     end
+  end
+
+  defp eval_publish_map!(publish, _env) when is_map(publish), do: publish
+
+  defp eval_publish_map!(publish_ast, env) do
+    case Code.eval_quoted(publish_ast, [], env) do
+      {%{} = publish, _binding} ->
+        publish
+
+      {other, _binding} ->
+        raise ArgumentError, "publish must evaluate to a map, got: #{inspect(other)}"
+    end
+  rescue
+    exception ->
+      raise ArgumentError,
+            "failed to evaluate :publish option for Jido.MCP.Server: #{Exception.message(exception)}"
   end
 end

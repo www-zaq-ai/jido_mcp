@@ -33,4 +33,34 @@ defmodule Jido.MCP.ResponseTest do
     assert error.type == :transport
     assert error.endpoint == :demo
   end
+
+  test "classifies protocol and validation errors" do
+    assert {:error, protocol_error} =
+             Response.normalize(:demo, "tools/list", {:error, %{reason: :method_not_found}})
+
+    assert protocol_error.type == :protocol
+
+    assert {:error, validation_error} =
+             Response.normalize(:demo, "tools/call", {:error, %{reason: :invalid_params}})
+
+    assert validation_error.type == :validation
+  end
+
+  test "extracts error messages from different response shapes" do
+    assert {:error, error} =
+             Response.normalize(:demo, "tools/list", {:error, %{"message" => "msg"}})
+
+    assert error.message == "msg"
+
+    assert {:error, error} =
+             Response.normalize(:demo, "tools/list", {:error, %{error: "failure"}})
+
+    assert error.message == "failure"
+
+    assert {:error, error} =
+             Response.normalize(:demo, "tools/list", {:error, %{reason: :other}})
+
+    assert error.type == :transport
+    assert error.message =~ "reason"
+  end
 end

@@ -1,6 +1,8 @@
 defmodule Jido.MCP.Actions.Helpers do
   @moduledoc false
 
+  alias Jido.MCP.{Config, EndpointID}
+
   @spec resolve_endpoint_id(map(), map()) :: {:ok, atom()} | {:error, term()}
   def resolve_endpoint_id(params, context) do
     endpoint_id =
@@ -22,11 +24,8 @@ defmodule Jido.MCP.Actions.Helpers do
   end
 
   @spec normalize_endpoint_id(term()) ::
-          {:ok, atom()} | {:error, :endpoint_required | :invalid_endpoint_id}
-  def normalize_endpoint_id(nil), do: {:error, :endpoint_required}
-  def normalize_endpoint_id(id) when is_atom(id), do: {:ok, id}
-  def normalize_endpoint_id(id) when is_binary(id) and id != "", do: {:ok, String.to_atom(id)}
-  def normalize_endpoint_id(_), do: {:error, :invalid_endpoint_id}
+          {:ok, atom()} | {:error, :endpoint_required | :invalid_endpoint_id | :unknown_endpoint}
+  def normalize_endpoint_id(id), do: EndpointID.resolve(id)
 
   defp validate_allowed(endpoint_id, context) do
     allowed =
@@ -37,17 +36,37 @@ defmodule Jido.MCP.Actions.Helpers do
         get_in(context, [:agent, :state, :mcp, :allowed_endpoints])
       ])
 
-    case allowed do
+    case normalize_allowed_endpoints(allowed) do
       nil ->
         :ok
 
-      list when is_list(list) ->
+      {:ok, list} ->
         if endpoint_id in list, do: :ok, else: {:error, :endpoint_not_allowed}
 
       _ ->
-        :ok
+        {:error, :invalid_allowed_endpoints}
     end
   end
+
+  defp normalize_allowed_endpoints(nil), do: nil
+
+  defp normalize_allowed_endpoints(values) when is_list(values) do
+    endpoints = Config.endpoints()
+
+    values
+    |> Enum.reduce_while({:ok, []}, fn value, {:ok, acc} ->
+      case EndpointID.resolve(value, endpoints) do
+        {:ok, endpoint_id} -> {:cont, {:ok, [endpoint_id | acc]}}
+        {:error, _reason} -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, endpoint_ids} -> {:ok, Enum.reverse(endpoint_ids)}
+      :error -> :error
+    end
+  end
+
+  defp normalize_allowed_endpoints(_), do: :error
 
   defp first_present(values), do: Enum.find(values, &(not is_nil(&1)))
 end

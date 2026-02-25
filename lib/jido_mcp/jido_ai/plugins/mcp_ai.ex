@@ -16,7 +16,7 @@ defmodule Jido.MCP.JidoAI.Plugins.MCPAI do
     description: "MCP to Jido.AI runtime tool synchronization",
     category: "mcp",
     tags: ["mcp", "jido_ai", "tool-sync"],
-    vsn: "0.1.0"
+    vsn: to_string(Application.spec(:jido_mcp, :vsn) || "0.1.1")
 
   @impl Jido.Plugin
   def mount(_agent, _config), do: {:ok, %{enabled: true}}
