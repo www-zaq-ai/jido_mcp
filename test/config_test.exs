@@ -35,7 +35,7 @@ defmodule Jido.MCP.ConfigTest do
   end
 
   test "normalize_endpoints rejects binary endpoint ids" do
-    assert_raise ArgumentError, ~r/endpoint ids must be atoms/, fn ->
+    assert_raise ArgumentError, ~r/endpoint keys must be atoms/, fn ->
       Config.normalize_endpoints(%{
         "github" => %{
           transport: {:streamable_http, [base_url: "http://localhost:3000/mcp"]},

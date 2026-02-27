@@ -37,6 +37,8 @@ defmodule Jido.MCP.Plugins.MCP do
     with {:ok, default_endpoint} <- normalize_default_endpoint(Map.get(config, :default_endpoint)),
          {:ok, allowed_endpoints} <-
            normalize_allowed_endpoints(Map.get(config, :allowed_endpoints)) do
+      ensure_default_endpoint_allowed!(default_endpoint, allowed_endpoints)
+
       {:ok,
        %{
          default_endpoint: default_endpoint,
@@ -88,4 +90,15 @@ defmodule Jido.MCP.Plugins.MCP do
   end
 
   defp normalize_allowed_endpoints(_), do: {:error, {:invalid_allowed_endpoints, :invalid_type}}
+
+  defp ensure_default_endpoint_allowed!(nil, _allowed_endpoints), do: :ok
+
+  defp ensure_default_endpoint_allowed!(default_endpoint, allowed_endpoints) do
+    if default_endpoint in allowed_endpoints do
+      :ok
+    else
+      raise ArgumentError,
+            "default_endpoint #{inspect(default_endpoint)} must be included in allowed_endpoints"
+    end
+  end
 end

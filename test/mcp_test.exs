@@ -110,11 +110,12 @@ defmodule Jido.MCPTest do
     assert {:ok, _} = MCP.list_tools(:github)
   end
 
-  test "refresh_endpoint returns refresh status data" do
+  test "refresh_endpoint refreshes then lists tools" do
     {:ok, endpoint} =
       Jido.MCP.Endpoint.new(:github, %{
         transport: {:stdio, [command: "cat", args: []]},
-        client_info: %{name: "test"}
+        client_info: %{name: "test"},
+        timeouts: %{request_ms: 444}
       })
 
     expect(Jido.MCP.ClientPool, :refresh, fn :github ->
@@ -122,13 +123,21 @@ defmodule Jido.MCPTest do
        %{client: :demo_client, supervisor: :demo_supervisor, transport: :demo_transport}}
     end)
 
-    expect(Jido.MCP.ClientPool, :endpoint_status, fn :github ->
-      {:ok, %{endpoint_id: :github, client_alive?: true}}
+    expect(Jido.MCP.ClientPool, :ensure_client, fn :github ->
+      {:ok, endpoint,
+       %{client: :demo_client, supervisor: :demo_supervisor, transport: :demo_transport}}
+    end)
+
+    raw = MCPResponse.from_json_rpc(%{"id" => "1", "result" => %{"tools" => []}})
+
+    expect(Anubis.Client.Base, :list_tools, fn :demo_client, opts ->
+      assert opts[:timeout] == 444
+      {:ok, raw}
     end)
 
     assert {:ok, result} = MCP.refresh_endpoint(:github)
-    assert result.method == "endpoint/refresh"
-    assert result.data.status.client_alive?
+    assert result.method == "tools/list"
+    assert result.data == %{"tools" => []}
   end
 
   test "endpoint_status passthrough" do
@@ -155,11 +164,12 @@ defmodule Jido.MCPTest do
     assert {:error, :unknown_endpoint} = MCP.refresh_endpoint(:github)
   end
 
-  test "refresh_endpoint propagates status errors" do
+  test "refresh_endpoint propagates list errors" do
     {:ok, endpoint} =
       Jido.MCP.Endpoint.new(:github, %{
         transport: {:stdio, [command: "cat", args: []]},
-        client_info: %{name: "test"}
+        client_info: %{name: "test"},
+        timeouts: %{request_ms: 444}
       })
 
     expect(Jido.MCP.ClientPool, :refresh, fn :github ->
@@ -167,10 +177,17 @@ defmodule Jido.MCPTest do
        %{client: :demo_client, supervisor: :demo_supervisor, transport: :demo_transport}}
     end)
 
-    expect(Jido.MCP.ClientPool, :endpoint_status, fn :github ->
+    expect(Jido.MCP.ClientPool, :ensure_client, fn :github ->
+      {:ok, endpoint,
+       %{client: :demo_client, supervisor: :demo_supervisor, transport: :demo_transport}}
+    end)
+
+    expect(Anubis.Client.Base, :list_tools, fn :demo_client, opts ->
+      assert opts[:timeout] == 444
       {:error, :not_started}
     end)
 
-    assert {:error, :not_started} = MCP.refresh_endpoint(:github)
+    assert {:error, %{status: :error, type: :transport, details: :not_started}} =
+             MCP.refresh_endpoint(:github)
   end
 end
