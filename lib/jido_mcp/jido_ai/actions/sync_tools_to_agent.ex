@@ -20,31 +20,35 @@ defmodule Jido.MCP.JidoAI.Actions.SyncToolsToAgent do
           |> Zoi.default(true)
       })
 
-  alias Jido.MCP.EndpointID
+  alias Jido.MCP.Config
   alias Jido.MCP.JidoAI.{ProxyGenerator, ProxyRegistry}
 
-  @default_max_tools_per_sync 100
-  @default_max_proxy_modules_per_endpoint 200
+  @max_tools 200
+  @max_schema_depth 8
+  @max_schema_properties 200
 
   @impl true
   def run(params, _context) do
     with :ok <- ensure_jido_ai_loaded(),
-         {:ok, endpoint_id} <- EndpointID.resolve(params[:endpoint_id]),
+         {:ok, endpoint_id} <- Config.resolve_endpoint_id(params[:endpoint_id]),
          {:ok, response} <- Jido.MCP.list_tools(endpoint_id),
          tools when is_list(tools) <- get_in(response, [:data, "tools"]) || [],
-         :ok <- validate_tool_count(tools),
-         {:ok, slot_map} <- assign_slots(endpoint_id, tools),
-         {:ok, entries, warnings} <-
+         :ok <- ensure_tool_limit(tools),
+         {:ok, modules, warnings, skipped} <-
            ProxyGenerator.build_modules(endpoint_id, tools,
              prefix: params[:prefix],
-             slot_map: slot_map
+             max_schema_depth: @max_schema_depth,
+             max_schema_properties: @max_schema_properties
            ) do
       if params[:replace_existing] != false do
         _ = unregister_previous(params[:agent_server], endpoint_id)
       end
 
-      {registered, failed} = register_modules(params[:agent_server], entries)
-      ProxyRegistry.set_active(endpoint_id, registered)
+      {registered, failed} = register_modules(params[:agent_server], modules)
+      skipped_failures = Enum.map(skipped, &{&1.tool_name, &1.reason})
+      failed = skipped_failures ++ failed
+
+      ProxyRegistry.put(params[:agent_server], endpoint_id, registered)
 
       {:ok,
        %{
@@ -54,9 +58,8 @@ defmodule Jido.MCP.JidoAI.Actions.SyncToolsToAgent do
          failed_count: length(failed),
          failed: failed,
          warnings: warnings,
-         registered_tools: Enum.map(registered, & &1.local_name),
-         max_tools_per_sync: max_tools_per_sync(),
-         max_proxy_modules_per_endpoint: max_proxy_modules_per_endpoint()
+         skipped_count: length(skipped),
+         registered_tools: Enum.map(registered, & &1.name())
        }}
     end
   end
@@ -71,13 +74,19 @@ defmodule Jido.MCP.JidoAI.Actions.SyncToolsToAgent do
     end
   end
 
-  defp register_modules(agent_server, entries) do
+  defp ensure_tool_limit(tools) when length(tools) > @max_tools do
+    {:error, {:tool_limit_exceeded, %{max_tools: @max_tools, discovered: length(tools)}}}
+  end
+
+  defp ensure_tool_limit(_tools), do: :ok
+
+  defp register_modules(agent_server, modules) do
     jido_ai = Module.concat([Jido, AI])
 
-    Enum.reduce(entries, {[], []}, fn entry, {ok, err} ->
-      case apply(jido_ai, :register_tool, [agent_server, entry.module]) do
-        {:ok, _agent} -> {[entry | ok], err}
-        {:error, reason} -> {ok, [{entry.local_name, reason} | err]}
+    Enum.reduce(modules, {[], []}, fn module, {ok, err} ->
+      case apply(jido_ai, :register_tool, [agent_server, module]) do
+        {:ok, _agent} -> {[module | ok], err}
+        {:error, reason} -> {ok, [{module, reason} | err]}
       end
     end)
     |> then(fn {ok, err} -> {Enum.reverse(ok), Enum.reverse(err)} end)
@@ -86,50 +95,13 @@ defmodule Jido.MCP.JidoAI.Actions.SyncToolsToAgent do
   defp unregister_previous(agent_server, endpoint_id) do
     jido_ai = Module.concat([Jido, AI])
 
-    endpoint_id
-    |> ProxyRegistry.active()
-    |> Enum.each(fn entry ->
-      _ = apply(jido_ai, :unregister_tool, [agent_server, entry.local_name])
+    agent_server
+    |> ProxyRegistry.get(endpoint_id)
+    |> Enum.each(fn module ->
+      _ = apply(jido_ai, :unregister_tool, [agent_server, module.name()])
     end)
 
-    ProxyRegistry.clear_active(endpoint_id)
+    _ = ProxyRegistry.delete(agent_server, endpoint_id)
     :ok
-  end
-
-  defp validate_tool_count(tools) do
-    count = length(tools)
-    max = max_tools_per_sync()
-
-    if count > max, do: {:error, {:too_many_tools, count, max}}, else: :ok
-  end
-
-  defp assign_slots(endpoint_id, tools) do
-    remote_names =
-      tools
-      |> Enum.map(&Map.get(&1, "name"))
-      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
-
-    ProxyRegistry.assign_slots(endpoint_id, remote_names, max_proxy_modules_per_endpoint())
-  end
-
-  defp max_tools_per_sync do
-    config_value(:max_tools_per_sync, @default_max_tools_per_sync)
-  end
-
-  defp max_proxy_modules_per_endpoint do
-    config_value(:max_proxy_modules_per_endpoint, @default_max_proxy_modules_per_endpoint)
-  end
-
-  defp config_value(key, default) do
-    sync_config = Application.get_env(:jido_mcp, :jido_ai_sync, [])
-
-    value =
-      case sync_config do
-        %{} -> Map.get(sync_config, key, Map.get(sync_config, to_string(key), default))
-        list when is_list(list) -> Keyword.get(list, key, default)
-        _ -> default
-      end
-
-    if is_integer(value) and value > 0, do: value, else: default
   end
 end

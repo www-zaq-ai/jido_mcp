@@ -12,25 +12,26 @@ defmodule Jido.MCP.JidoAI.Actions.UnsyncToolsFromAgent do
         agent_server: Zoi.any(description: "PID or registered name of the running Jido.AI agent")
       })
 
-  alias Jido.MCP.EndpointID
+  alias Jido.MCP.Config
   alias Jido.MCP.JidoAI.ProxyRegistry
 
   @impl true
   def run(params, _context) do
     with :ok <- ensure_jido_ai_loaded(),
-         {:ok, endpoint_id} <- EndpointID.resolve(params[:endpoint_id]) do
+         {:ok, endpoint_id} <- Config.resolve_endpoint_id(params[:endpoint_id]) do
       jido_ai = Module.concat([Jido, AI])
-      entries = ProxyRegistry.active(endpoint_id)
+      modules = ProxyRegistry.get(params[:agent_server], endpoint_id)
 
       {removed, failed} =
-        Enum.reduce(entries, {[], []}, fn entry, {ok, err} ->
-          case apply(jido_ai, :unregister_tool, [params[:agent_server], entry.local_name]) do
-            {:ok, _agent} -> {[entry.local_name | ok], err}
-            {:error, reason} -> {ok, [{entry.local_name, reason} | err]}
+        Enum.reduce(modules, {[], []}, fn module, {ok, err} ->
+          case apply(jido_ai, :unregister_tool, [params[:agent_server], module.name()]) do
+            {:ok, _agent} -> {[module.name() | ok], err}
+            {:error, reason} -> {ok, [{module.name(), reason} | err]}
           end
         end)
 
-      ProxyRegistry.clear_active(endpoint_id)
+      deleted_modules = ProxyRegistry.delete(params[:agent_server], endpoint_id)
+      {purged, retained, purge_failed} = cleanup_deleted_modules(deleted_modules)
 
       {:ok,
        %{
@@ -38,7 +39,13 @@ defmodule Jido.MCP.JidoAI.Actions.UnsyncToolsFromAgent do
          removed_count: length(removed),
          failed_count: length(failed),
          removed_tools: Enum.reverse(removed),
-         failed: Enum.reverse(failed)
+         failed: Enum.reverse(failed),
+         purged_count: length(purged),
+         retained_count: length(retained),
+         purge_failed_count: length(purge_failed),
+         purged_modules: Enum.reverse(purged),
+         retained_modules: Enum.reverse(retained),
+         purge_failed: Enum.reverse(purge_failed)
        }}
     end
   end
@@ -51,5 +58,40 @@ defmodule Jido.MCP.JidoAI.Actions.UnsyncToolsFromAgent do
     else
       {:error, :jido_ai_not_available}
     end
+  end
+
+  defp cleanup_deleted_modules(modules) do
+    Enum.reduce(modules, {[], [], []}, fn module, {purged, retained, failed} ->
+      cond do
+        ProxyRegistry.module_in_use?(module) ->
+          {purged, [module | retained], failed}
+
+        true ->
+          case purge_module(module) do
+            :ok -> {[module | purged], retained, failed}
+            {:error, reason} -> {purged, retained, [{module, reason} | failed]}
+          end
+      end
+    end)
+  end
+
+  defp purge_module(module) when is_atom(module) do
+    if proxy_module?(module) and Code.ensure_loaded?(module) do
+      _ = :code.purge(module)
+      _ = :code.delete(module)
+      :ok
+    else
+      :ok
+    end
+  rescue
+    exception -> {:error, Exception.message(exception)}
+  catch
+    kind, reason -> {:error, inspect({kind, reason})}
+  end
+
+  defp proxy_module?(module) do
+    module
+    |> Atom.to_string()
+    |> String.starts_with?("Elixir.Jido.MCP.JidoAI.Proxy.")
   end
 end

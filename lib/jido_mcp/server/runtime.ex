@@ -4,6 +4,7 @@ defmodule Jido.MCP.Server.Runtime do
   alias Anubis.MCP.Error
   alias Anubis.Server.Frame
   alias Anubis.Server.Response
+  alias Jido.Action.Schema
 
   @spec register_tool(Frame.t(), module()) :: Frame.t()
   def register_tool(%Frame{} = frame, module) when is_atom(module) do
@@ -35,33 +36,53 @@ defmodule Jido.MCP.Server.Runtime do
           {:reply, Response.t(), Frame.t()} | {:error, Error.t(), Frame.t()}
   def handle_tool_call(tool_modules, name, arguments, %Frame{} = frame, server_module)
       when is_list(tool_modules) and is_binary(name) and is_map(arguments) do
-    with :ok <-
-           authorize(server_module, %{type: :tool_call, name: name, arguments: arguments}, frame),
-         {:ok, module} <- find_tool(tool_modules, name) do
-      case Jido.Exec.run(module, arguments, build_action_context(frame)) do
-        {:ok, output} ->
-          {:reply, tool_response(output), frame}
+    try do
+      with :ok <-
+             authorize(
+               server_module,
+               %{type: :tool_call, name: name, arguments: arguments},
+               frame
+             ),
+           {:ok, module} <- find_tool(tool_modules, name) do
+        case Jido.Exec.run(module, arguments, build_action_context(frame)) do
+          {:ok, output} ->
+            {:reply, tool_response(output), frame}
 
-        {:ok, output, _directives} ->
-          {:reply, tool_response(output), frame}
+          {:ok, output, _directives} ->
+            {:reply, tool_response(output), frame}
 
-        {:error, reason} ->
-          {:reply, Response.tool() |> Response.error(inspect(reason)), frame}
+          {:error, reason} ->
+            {:reply, Response.tool() |> Response.error(inspect(reason)), frame}
 
-        {:error, reason, _directives} ->
-          {:reply, Response.tool() |> Response.error(inspect(reason)), frame}
+          {:error, reason, _directives} ->
+            {:reply, Response.tool() |> Response.error(inspect(reason)), frame}
+
+          other ->
+            {:reply,
+             Response.tool() |> Response.error("Unexpected action result: #{inspect(other)}"),
+             frame}
+        end
+      else
+        {:error, :not_found} ->
+          {:error, Error.protocol(:invalid_params, %{message: "Tool not found: #{name}"}), frame}
+
+        {:error, :unauthorized} ->
+          {:error, Error.protocol(:invalid_request, %{message: "Unauthorized tool call"}), frame}
       end
-    else
-      {:error, :not_found} ->
-        {:error, Error.protocol(:invalid_params, %{message: "Tool not found: #{name}"}), frame}
-
-      {:error, :unauthorized} ->
-        {:error, Error.protocol(:invalid_request, %{message: "Unauthorized tool call"}), frame}
-
-      {:error, {:authorization_failed, reason}} ->
+    rescue
+      exception ->
         {:error,
-         Error.execution("Authorization callback failed", %{reason: inspect(reason), name: name}),
-         frame}
+         Error.execution("Tool call execution failed", %{
+           name: name,
+           reason: Exception.message(exception)
+         }), frame}
+    catch
+      kind, reason ->
+        {:error,
+         Error.execution("Tool call execution failed", %{
+           name: name,
+           reason: inspect({kind, reason})
+         }), frame}
     end
   end
 
@@ -69,39 +90,46 @@ defmodule Jido.MCP.Server.Runtime do
           {:reply, Response.t(), Frame.t()} | {:error, Error.t(), Frame.t()}
   def handle_resource_read(resource_modules, uri, %Frame{} = frame, server_module)
       when is_list(resource_modules) and is_binary(uri) do
-    with :ok <- authorize(server_module, %{type: :resource_read, uri: uri}, frame),
-         {:ok, module} <- find_resource(resource_modules, uri) do
-      case safe_invoke(fn -> module.read(uri, frame) end) do
-        {:ok, {:ok, content}} ->
-          {:reply, resource_response(content), frame}
+    try do
+      with :ok <- authorize(server_module, %{type: :resource_read, uri: uri}, frame),
+           {:ok, module} <- find_resource(resource_modules, uri) do
+        case module.read(uri, frame) do
+          {:ok, content} ->
+            {:reply, resource_response(content), frame}
 
-        {:ok, {:error, reason}} ->
-          {:error, Error.resource(:not_found, %{message: inspect(reason), uri: uri}), frame}
+          {:error, reason} ->
+            {:error, Error.resource(:not_found, %{message: inspect(reason), uri: uri}), frame}
 
-        {:ok, other} ->
-          {:error,
-           Error.execution("Resource reader returned invalid response", %{
-             uri: uri,
-             response: inspect(other)
-           }), frame}
+          other ->
+            {:error,
+             Error.execution("Resource read returned invalid result", %{
+               uri: uri,
+               result: inspect(other)
+             }), frame}
+        end
+      else
+        {:error, :not_found} ->
+          {:error, Error.resource(:not_found, %{message: "Resource not found: #{uri}", uri: uri}),
+           frame}
 
-        {:error, reason} ->
-          {:error, Error.execution("Resource read failed", %{reason: inspect(reason), uri: uri}),
+        {:error, :unauthorized} ->
+          {:error, Error.protocol(:invalid_request, %{message: "Unauthorized resource read"}),
            frame}
       end
-    else
-      {:error, :not_found} ->
-        {:error, Error.resource(:not_found, %{message: "Resource not found: #{uri}", uri: uri}),
-         frame}
-
-      {:error, :unauthorized} ->
-        {:error, Error.protocol(:invalid_request, %{message: "Unauthorized resource read"}),
-         frame}
-
-      {:error, {:authorization_failed, reason}} ->
+    rescue
+      exception ->
         {:error,
-         Error.execution("Authorization callback failed", %{reason: inspect(reason), uri: uri}),
-         frame}
+         Error.execution("Resource read failed", %{
+           uri: uri,
+           reason: Exception.message(exception)
+         }), frame}
+    catch
+      kind, reason ->
+        {:error,
+         Error.execution("Resource read failed", %{
+           uri: uri,
+           reason: inspect({kind, reason})
+         }), frame}
     end
   end
 
@@ -109,40 +137,52 @@ defmodule Jido.MCP.Server.Runtime do
           {:reply, Response.t(), Frame.t()} | {:error, Error.t(), Frame.t()}
   def handle_prompt_get(prompt_modules, name, arguments, %Frame{} = frame, server_module)
       when is_list(prompt_modules) and is_binary(name) and is_map(arguments) do
-    with :ok <-
-           authorize(server_module, %{type: :prompt_get, name: name, arguments: arguments}, frame),
-         {:ok, module} <- find_prompt(prompt_modules, name) do
-      case safe_invoke(fn -> module.messages(arguments, frame) end) do
-        {:ok, {:ok, messages}} when is_list(messages) ->
-          {:reply, prompt_response(messages), frame}
+    try do
+      with :ok <-
+             authorize(
+               server_module,
+               %{type: :prompt_get, name: name, arguments: arguments},
+               frame
+             ),
+           {:ok, module} <- find_prompt(prompt_modules, name) do
+        case module.messages(arguments, frame) do
+          {:ok, messages} when is_list(messages) ->
+            {:reply, prompt_response(messages), frame}
 
-        {:ok, {:error, reason}} ->
-          {:error, Error.execution("Prompt rendering failed", %{reason: inspect(reason)}), frame}
+          {:error, reason} ->
+            {:error, Error.execution("Prompt rendering failed", %{reason: inspect(reason)}),
+             frame}
 
-        {:ok, other} ->
-          {:error,
-           Error.execution("Prompt provider returned invalid response", %{
-             name: name,
-             response: inspect(other)
-           }), frame}
+          other ->
+            {:error,
+             Error.execution("Prompt rendering returned invalid result", %{
+               name: name,
+               result: inspect(other)
+             }), frame}
+        end
+      else
+        {:error, :not_found} ->
+          {:error, Error.protocol(:invalid_params, %{message: "Prompt not found: #{name}"}),
+           frame}
 
-        {:error, reason} ->
-          {:error,
-           Error.execution("Prompt rendering failed", %{name: name, reason: inspect(reason)}),
+        {:error, :unauthorized} ->
+          {:error, Error.protocol(:invalid_request, %{message: "Unauthorized prompt access"}),
            frame}
       end
-    else
-      {:error, :not_found} ->
-        {:error, Error.protocol(:invalid_params, %{message: "Prompt not found: #{name}"}), frame}
-
-      {:error, :unauthorized} ->
-        {:error, Error.protocol(:invalid_request, %{message: "Unauthorized prompt access"}),
-         frame}
-
-      {:error, {:authorization_failed, reason}} ->
+    rescue
+      exception ->
         {:error,
-         Error.execution("Authorization callback failed", %{reason: inspect(reason), name: name}),
-         frame}
+         Error.execution("Prompt rendering failed", %{
+           name: name,
+           reason: Exception.message(exception)
+         }), frame}
+    catch
+      kind, reason ->
+        {:error,
+         Error.execution("Prompt rendering failed", %{
+           name: name,
+           reason: inspect({kind, reason})
+         }), frame}
     end
   end
 
@@ -214,7 +254,7 @@ defmodule Jido.MCP.Server.Runtime do
   defp action_input_schema(module) do
     module
     |> apply(:schema, [])
-    |> Jido.Action.Schema.to_json_schema()
+    |> Schema.to_json_schema(strict: true)
   rescue
     _ -> %{"type" => "object", "properties" => %{}, "required" => []}
   end
@@ -224,25 +264,20 @@ defmodule Jido.MCP.Server.Runtime do
   end
 
   defp authorize(server_module, request, frame) do
-    if function_exported?(server_module, :authorize, 2) do
-      case safe_invoke(fn -> server_module.authorize(request, frame) end) do
-        {:ok, :ok} -> :ok
-        {:ok, true} -> :ok
-        {:ok, _} -> {:error, :unauthorized}
-        {:error, reason} -> {:error, {:authorization_failed, reason}}
+    try do
+      if function_exported?(server_module, :authorize, 2) do
+        case server_module.authorize(request, frame) do
+          :ok -> :ok
+          true -> :ok
+          _ -> {:error, :unauthorized}
+        end
+      else
+        :ok
       end
-    else
-      :ok
+    rescue
+      _ -> {:error, :unauthorized}
+    catch
+      _, _ -> {:error, :unauthorized}
     end
-  end
-
-  defp safe_invoke(fun) when is_function(fun, 0) do
-    {:ok, fun.()}
-  rescue
-    exception ->
-      {:error, {:exception, Exception.message(exception)}}
-  catch
-    kind, value ->
-      {:error, {kind, value}}
   end
 end

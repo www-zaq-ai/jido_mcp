@@ -32,18 +32,49 @@ defmodule Jido.MCP.Server do
     [server: server_module]
   end
 
+  defp normalize_publish!(publish, caller) do
+    publish =
+      cond do
+        is_map(publish) ->
+          publish
+
+        is_list(publish) and Keyword.keyword?(publish) ->
+          Enum.into(publish, %{})
+
+        true ->
+          case Code.eval_quoted(publish, [], caller) do
+            {value, _binding} when is_map(value) ->
+              value
+
+            {value, _binding} when is_list(value) ->
+              if Keyword.keyword?(value) do
+                Enum.into(value, %{})
+              else
+                raise ArgumentError,
+                      "publish must evaluate to a map or keyword list, got: #{inspect(value)}"
+              end
+
+            {value, _binding} ->
+              raise ArgumentError,
+                    "publish must evaluate to a map or keyword list, got: #{inspect(value)}"
+          end
+      end
+
+    %{
+      tools: List.wrap(Map.get(publish, :tools, [])),
+      resources: List.wrap(Map.get(publish, :resources, [])),
+      prompts: List.wrap(Map.get(publish, :prompts, []))
+    }
+  end
+
   defmacro __using__(opts) do
     name = Keyword.fetch!(opts, :name)
     version = Keyword.fetch!(opts, :version)
+    publish = normalize_publish!(Keyword.get(opts, :publish, %{}), __CALLER__)
 
-    publish =
-      opts
-      |> Keyword.get(:publish, %{})
-      |> eval_publish_map!(__CALLER__)
-
-    tools = Map.get(publish, :tools, [])
-    resources = Map.get(publish, :resources, [])
-    prompts = Map.get(publish, :prompts, [])
+    tools = publish.tools
+    resources = publish.resources
+    prompts = publish.prompts
 
     capabilities = []
     capabilities = if tools != [], do: capabilities ++ [:tools], else: capabilities
@@ -125,21 +156,5 @@ defmodule Jido.MCP.Server do
 
       defoverridable authorize: 2
     end
-  end
-
-  defp eval_publish_map!(publish, _env) when is_map(publish), do: publish
-
-  defp eval_publish_map!(publish_ast, env) do
-    case Code.eval_quoted(publish_ast, [], env) do
-      {%{} = publish, _binding} ->
-        publish
-
-      {other, _binding} ->
-        raise ArgumentError, "publish must evaluate to a map, got: #{inspect(other)}"
-    end
-  rescue
-    exception ->
-      raise ArgumentError,
-            "failed to evaluate :publish option for Jido.MCP.Server: #{Exception.message(exception)}"
   end
 end

@@ -61,18 +61,9 @@ defmodule Jido.MCP do
 
   @spec refresh_endpoint(endpoint_id()) :: result()
   def refresh_endpoint(endpoint_id) when is_atom(endpoint_id) do
-    with {:ok, endpoint, _ref} <- ClientPool.refresh(endpoint_id),
-         {:ok, status} <- ClientPool.endpoint_status(endpoint_id) do
-      {:ok,
-       %{
-         status: :ok,
-         endpoint: endpoint_id,
-         method: "endpoint/refresh",
-         data: %{
-           endpoint: endpoint,
-           status: status
-         }
-       }}
+    with {:ok, _endpoint, _ref} <- ClientPool.refresh(endpoint_id),
+         {:ok, _} = listed <- list_tools(endpoint_id) do
+      listed
     end
   end
 
@@ -83,7 +74,8 @@ defmodule Jido.MCP do
 
   defp execute(endpoint_id, method, opts, fun) do
     with {:ok, endpoint, ref} <- ClientPool.ensure_client(endpoint_id) do
-      call_opts = Keyword.put_new(opts, :timeout, endpoint.timeouts.request_ms)
+      timeout = Keyword.get(opts, :timeout, endpoint.timeouts.request_ms)
+      call_opts = Keyword.put_new(opts, :timeout, timeout)
       response = fun.(ref.client, call_opts)
       Response.normalize(endpoint_id, method, response)
     end
