@@ -3,6 +3,19 @@ defmodule Jido.MCP.ConfigTest do
 
   alias Jido.MCP.Config
 
+  defmodule EndpointLoader do
+    def valid_endpoints do
+      %{
+        github: %{
+          transport: {:stdio, [command: "cat", args: []]},
+          client_info: %{name: "loader_app"}
+        }
+      }
+    end
+
+    def invalid_endpoints, do: :invalid
+  end
+
   setup do
     previous = Application.get_env(:jido_mcp, :endpoints)
 
@@ -42,6 +55,22 @@ defmodule Jido.MCP.ConfigTest do
           client_info: %{name: "my_app"}
         }
       })
+    end
+  end
+
+  test "loads endpoints from an MFA callback" do
+    Application.put_env(:jido_mcp, :endpoints, {EndpointLoader, :valid_endpoints, []})
+
+    assert %{github: endpoint} = Config.endpoints()
+    assert endpoint.id == :github
+    assert endpoint.client_info["name"] == "loader_app"
+  end
+
+  test "raises when endpoints MFA callback returns invalid data" do
+    Application.put_env(:jido_mcp, :endpoints, {EndpointLoader, :invalid_endpoints, []})
+
+    assert_raise ArgumentError, ~r/MFA callback return/, fn ->
+      Config.endpoints()
     end
   end
 end

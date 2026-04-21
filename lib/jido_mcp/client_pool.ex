@@ -26,6 +26,24 @@ defmodule Jido.MCP.ClientPool do
     GenServer.call(__MODULE__, {:ensure_client, endpoint_id})
   end
 
+  @spec endpoints() :: {:ok, %{required(atom()) => Endpoint.t()}} | {:error, :not_started}
+  def endpoints do
+    case Process.whereis(__MODULE__) do
+      nil -> {:error, :not_started}
+      _pid -> GenServer.call(__MODULE__, :endpoints)
+    end
+  end
+
+  @spec register_endpoint(Endpoint.t()) :: :ok | {:error, term()}
+  def register_endpoint(%Endpoint{} = endpoint) do
+    GenServer.call(__MODULE__, {:register_endpoint, endpoint})
+  end
+
+  @spec unregister_endpoint(atom()) :: :ok | {:error, :unknown_endpoint}
+  def unregister_endpoint(endpoint_id) when is_atom(endpoint_id) do
+    GenServer.call(__MODULE__, {:unregister_endpoint, endpoint_id})
+  end
+
   @spec endpoint_status(atom()) :: {:ok, map()} | {:error, term()}
   def endpoint_status(endpoint_id) when is_atom(endpoint_id) do
     GenServer.call(__MODULE__, {:endpoint_status, endpoint_id})
@@ -52,6 +70,36 @@ defmodule Jido.MCP.ClientPool do
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call(:endpoints, _from, state) do
+    {:reply, {:ok, state.endpoints}, state}
+  end
+
+  def handle_call({:register_endpoint, %Endpoint{} = endpoint}, _from, state) do
+    if Map.has_key?(state.endpoints, endpoint.id) do
+      {:reply, {:error, :duplicate_endpoint}, state}
+    else
+      state = put_in(state, [:endpoints, endpoint.id], endpoint)
+      :ok = Config.register_runtime_endpoint(endpoint)
+      {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:unregister_endpoint, endpoint_id}, _from, state) do
+    if Map.has_key?(state.endpoints, endpoint_id) do
+      state =
+        endpoint_id
+        |> maybe_stop_endpoint(state)
+        |> then(fn updated_state ->
+          Map.put(updated_state, :endpoints, Map.delete(updated_state.endpoints, endpoint_id))
+        end)
+
+      :ok = Config.unregister_runtime_endpoint(endpoint_id)
+      {:reply, :ok, state}
+    else
+      {:reply, {:error, :unknown_endpoint}, state}
     end
   end
 

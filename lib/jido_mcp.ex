@@ -3,7 +3,7 @@ defmodule Jido.MCP do
   Public API for calling MCP servers through direct Anubis client integration.
   """
 
-  alias Jido.MCP.{ClientPool, Response}
+  alias Jido.MCP.{ClientPool, Endpoint, Response}
 
   @type endpoint_id :: atom()
   @type result :: {:ok, map()} | {:error, map()}
@@ -65,6 +65,16 @@ defmodule Jido.MCP do
          {:ok, _} = listed <- list_tools(endpoint_id) do
       listed
     end
+  end
+
+  @spec register_endpoint(Endpoint.t()) :: :ok | {:error, term()}
+  def register_endpoint(%Endpoint{} = endpoint) do
+    ClientPool.register_endpoint(endpoint)
+  end
+
+  @spec unregister_endpoint(endpoint_id()) :: :ok | {:error, :unknown_endpoint}
+  def unregister_endpoint(endpoint_id) when is_atom(endpoint_id) do
+    ClientPool.unregister_endpoint(endpoint_id)
   end
 
   @spec endpoint_status(endpoint_id()) :: {:ok, map()} | {:error, term()}

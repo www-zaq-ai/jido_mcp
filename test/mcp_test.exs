@@ -148,6 +148,28 @@ defmodule Jido.MCPTest do
     assert {:ok, %{endpoint_id: :github}} = MCP.endpoint_status(:github)
   end
 
+  test "register_endpoint delegates to client pool" do
+    {:ok, endpoint} =
+      Jido.MCP.Endpoint.new(:local_fs, %{
+        transport: {:stdio, [command: "cat", args: []]},
+        client_info: %{name: "test"}
+      })
+
+    expect(Jido.MCP.ClientPool, :register_endpoint, fn ^endpoint ->
+      :ok
+    end)
+
+    assert :ok = MCP.register_endpoint(endpoint)
+  end
+
+  test "unregister_endpoint delegates to client pool" do
+    expect(Jido.MCP.ClientPool, :unregister_endpoint, fn :github ->
+      :ok
+    end)
+
+    assert :ok = MCP.unregister_endpoint(:github)
+  end
+
   test "returns client pool errors" do
     expect(Jido.MCP.ClientPool, :ensure_client, fn :github ->
       {:error, :unknown_endpoint}

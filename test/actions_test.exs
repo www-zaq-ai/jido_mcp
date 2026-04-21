@@ -10,7 +10,8 @@ defmodule Jido.MCP.ActionsTest do
     ListResources,
     ListTools,
     ReadResource,
-    RefreshEndpoint
+    RefreshEndpoint,
+    SetDefaultEndpoint
   }
 
   setup :set_mimic_from_context
@@ -142,5 +143,19 @@ defmodule Jido.MCP.ActionsTest do
 
     assert {:error, :endpoint_not_allowed} =
              ListTools.run(%{endpoint_id: :filesystem}, context)
+  end
+
+  test "set default endpoint updates plugin state patch and enforces allowlist" do
+    assert {:ok, %{mcp: %{default_endpoint: :github}}} =
+             SetDefaultEndpoint.run(%{endpoint_id: "github"}, %{allowed_endpoints: [:github]})
+
+    assert {:error, :endpoint_not_allowed} =
+             SetDefaultEndpoint.run(%{endpoint_id: :filesystem}, %{allowed_endpoints: [:github]})
+
+    assert {:ok, %{mcp: %{default_endpoint: :filesystem}}} =
+             SetDefaultEndpoint.run(%{endpoint_id: :filesystem}, %{allowed_endpoints: :all})
+
+    assert {:ok, %{mcp: %{default_endpoint: nil}}} =
+             SetDefaultEndpoint.run(%{}, %{allowed_endpoints: :all})
   end
 end
