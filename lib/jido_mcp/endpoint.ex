@@ -55,18 +55,92 @@ defmodule Jido.MCP.Endpoint do
     end
   end
 
-  defp validate_transport({:stdio, opts}) when is_list(opts), do: {:ok, {:stdio, opts}}
-  defp validate_transport({:shell, opts}) when is_list(opts), do: {:ok, {:stdio, opts}}
-  defp validate_transport({:sse, opts}) when is_list(opts), do: {:ok, {:sse, opts}}
+  defp validate_transport({:stdio, opts}) when is_list(opts),
+    do: validate_transport_opts(:stdio, opts)
+
+  defp validate_transport({:shell, opts}) when is_list(opts),
+    do: validate_transport_opts(:stdio, opts)
+
+  defp validate_transport({:sse, opts}) when is_list(opts),
+    do: validate_transport_opts(:sse, opts)
 
   defp validate_transport({:streamable_http, opts}) when is_list(opts),
-    do: {:ok, {:streamable_http, opts}}
+    do: validate_transport_opts(:streamable_http, opts)
 
   defp validate_transport(other),
     do:
       {:error,
        {:invalid_transport, other,
         "transport must be {:stdio, keyword()}, {:shell, keyword()}, {:sse, keyword()}, or {:streamable_http, keyword()}"}}
+
+  defp validate_transport_opts(_layer, opts) when not is_list(opts) do
+    {:error, {:invalid_transport_options, opts, "transport options must be a keyword list"}}
+  end
+
+  defp validate_transport_opts(layer, opts) do
+    if Keyword.keyword?(opts) do
+      {:ok, {layer, normalize_transport_opts(layer, opts)}}
+    else
+      {:error, {:invalid_transport_options, opts, "transport options must be a keyword list"}}
+    end
+  end
+
+  defp normalize_transport_opts(:streamable_http, opts) do
+    opts
+    |> normalize_streamable_http_url()
+    |> normalize_streamable_http_base_url()
+  end
+
+  defp normalize_transport_opts(:sse, opts) do
+    if Keyword.has_key?(opts, :server) do
+      opts
+    else
+      {server_opts, transport_opts} = Keyword.split(opts, [:base_url, :base_path, :sse_path])
+
+      if server_opts == [] do
+        opts
+      else
+        Keyword.put(transport_opts, :server, server_opts)
+      end
+    end
+  end
+
+  defp normalize_transport_opts(_layer, opts), do: opts
+
+  defp normalize_streamable_http_url(opts) do
+    case Keyword.pop(opts, :url) do
+      {nil, opts} -> opts
+      {url, opts} when is_binary(url) -> put_url_parts(opts, url)
+      {url, opts} -> Keyword.put(opts, :url, url)
+    end
+  end
+
+  defp normalize_streamable_http_base_url(opts) do
+    base_url = Keyword.get(opts, :base_url)
+
+    if is_binary(base_url) and not Keyword.has_key?(opts, :mcp_path) do
+      put_url_parts(Keyword.delete(opts, :base_url), base_url)
+    else
+      opts
+    end
+  end
+
+  defp put_url_parts(opts, url) do
+    uri = URI.parse(url)
+    path = if is_binary(uri.path) and uri.path != "", do: uri.path, else: "/mcp"
+
+    opts
+    |> Keyword.put(:base_url, base_uri(uri))
+    |> Keyword.put(:mcp_path, path)
+  end
+
+  defp base_uri(%URI{} = uri) do
+    uri
+    |> Map.put(:path, nil)
+    |> Map.put(:query, nil)
+    |> Map.put(:fragment, nil)
+    |> URI.to_string()
+  end
 
   defp validate_client_info(%{"name" => name} = info) when is_binary(name) do
     version = Map.get(info, "version", "1.0.0")

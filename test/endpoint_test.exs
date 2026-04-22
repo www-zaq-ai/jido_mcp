@@ -28,7 +28,7 @@ defmodule Jido.MCP.EndpointTest do
 
     assert {:ok, sse_endpoint} =
              Endpoint.new(:legacy_sse, %{
-               transport: {:sse, server: [base_url: "http://localhost:3000", sse_path: "/sse"]},
+               transport: {:sse, base_url: "http://localhost:3000", sse_path: "/sse"},
                client_info: %{name: "my_app"}
              })
 
@@ -50,10 +50,38 @@ defmodule Jido.MCP.EndpointTest do
               [base_url: "http://localhost:3000", mcp_path: "/mcp", enable_sse: true]}
   end
 
+  test "normalizes streamable HTTP URL options for Anubis 1.1" do
+    assert {:ok, endpoint} =
+             Endpoint.new(:http_url, %{
+               transport: {:streamable_http, url: "http://localhost:3000/custom-mcp"},
+               client_info: %{name: "my_app"}
+             })
+
+    assert {:streamable_http, opts} = endpoint.transport
+    assert opts[:base_url] == "http://localhost:3000"
+    assert opts[:mcp_path] == "/custom-mcp"
+
+    assert {:ok, legacy_endpoint} =
+             Endpoint.new(:http_legacy, %{
+               transport: {:streamable_http, base_url: "http://localhost:3000/mcp"},
+               client_info: %{name: "my_app"}
+             })
+
+    assert {:streamable_http, opts} = legacy_endpoint.transport
+    assert opts[:base_url] == "http://localhost:3000"
+    assert opts[:mcp_path] == "/mcp"
+  end
+
   test "rejects invalid transport" do
     assert {:error, {:invalid_transport, _, _}} =
              Endpoint.new(:bad, %{
                transport: {:websocket, url: "ws://localhost:3000/mcp"},
+               client_info: %{name: "my_app"}
+             })
+
+    assert {:error, {:invalid_transport_options, _, _}} =
+             Endpoint.new(:bad, %{
+               transport: {:stdio, ["echo"]},
                client_info: %{name: "my_app"}
              })
   end

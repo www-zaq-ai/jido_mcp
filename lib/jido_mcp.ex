@@ -11,10 +11,6 @@ defmodule Jido.MCP do
   @spec register_endpoint(Endpoint.t()) ::
           {:ok, Endpoint.t()}
           | {:error, {:endpoint_already_registered, atom()} | {:invalid_endpoint, term()}}
-  def register_endpoint(%Endpoint{} = endpoint) do
-    ClientPool.register_endpoint(endpoint)
-  end
-
   def register_endpoint(endpoint) do
     ClientPool.register_endpoint(endpoint)
   end
