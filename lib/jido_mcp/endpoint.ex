@@ -118,7 +118,7 @@ defmodule Jido.MCP.Endpoint do
   defp normalize_streamable_http_base_url(opts) do
     base_url = Keyword.get(opts, :base_url)
 
-    if is_binary(base_url) and not Keyword.has_key?(opts, :mcp_path) do
+    if is_binary(base_url) and not Keyword.has_key?(opts, :mcp_path) and pathful_url?(base_url) do
       put_url_parts(Keyword.delete(opts, :base_url), base_url)
     else
       opts
@@ -127,11 +127,28 @@ defmodule Jido.MCP.Endpoint do
 
   defp put_url_parts(opts, url) do
     uri = URI.parse(url)
-    path = if is_binary(uri.path) and uri.path != "", do: uri.path, else: "/mcp"
+    path = endpoint_path(uri)
 
     opts
     |> Keyword.put(:base_url, base_uri(uri))
     |> Keyword.put(:mcp_path, path)
+  end
+
+  defp pathful_url?(url) do
+    case URI.parse(url).path do
+      path when is_binary(path) and path not in ["", "/"] -> true
+      _ -> false
+    end
+  end
+
+  defp endpoint_path(%URI{} = uri) do
+    path = if is_binary(uri.path) and uri.path != "", do: uri.path, else: "/mcp"
+
+    if is_binary(uri.query) and uri.query != "" do
+      path <> "?" <> uri.query
+    else
+      path
+    end
   end
 
   defp base_uri(%URI{} = uri) do

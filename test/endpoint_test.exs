@@ -61,6 +61,16 @@ defmodule Jido.MCP.EndpointTest do
     assert opts[:base_url] == "http://localhost:3000"
     assert opts[:mcp_path] == "/custom-mcp"
 
+    assert {:ok, query_endpoint} =
+             Endpoint.new(:http_url_query, %{
+               transport: {:streamable_http, url: "http://localhost:3000/custom-mcp?token=abc"},
+               client_info: %{name: "my_app"}
+             })
+
+    assert {:streamable_http, opts} = query_endpoint.transport
+    assert opts[:base_url] == "http://localhost:3000"
+    assert opts[:mcp_path] == "/custom-mcp?token=abc"
+
     assert {:ok, legacy_endpoint} =
              Endpoint.new(:http_legacy, %{
                transport: {:streamable_http, base_url: "http://localhost:3000/mcp"},
@@ -70,6 +80,16 @@ defmodule Jido.MCP.EndpointTest do
     assert {:streamable_http, opts} = legacy_endpoint.transport
     assert opts[:base_url] == "http://localhost:3000"
     assert opts[:mcp_path] == "/mcp"
+
+    assert {:ok, base_endpoint} =
+             Endpoint.new(:http_base, %{
+               transport: {:streamable_http, base_url: "http://localhost:3000/"},
+               client_info: %{name: "my_app"}
+             })
+
+    assert {:streamable_http, opts} = base_endpoint.transport
+    assert opts[:base_url] == "http://localhost:3000/"
+    refute Keyword.has_key?(opts, :mcp_path)
   end
 
   test "rejects invalid transport" do

@@ -44,8 +44,8 @@ Supported transports in v1:
 - `{:sse, keyword()}` for legacy HTTP+SSE servers using protocol `2024-11-05`
 - `{:streamable_http, keyword()}` for MCP `2025-03-26` / `2025-06-18`, including optional SSE streaming via Anubis' `:enable_sse` option
 
-For Streamable HTTP, `:url` or a `:base_url` containing a path is normalized to
-Anubis' `:base_url` + `:mcp_path` option shape.
+For Streamable HTTP, `:url` or a `:base_url` containing a non-root path is
+normalized to Anubis' `:base_url` + `:mcp_path` option shape.
 
 Endpoint config may also be loaded through an MFA callback:
 
