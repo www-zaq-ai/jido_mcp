@@ -1,6 +1,7 @@
 defmodule Jido.MCP.Plugins.MCPTest do
   use ExUnit.Case, async: false
 
+  alias Jido.MCP.{ClientPool, Config}
   alias Jido.MCP.Plugins.MCP
 
   setup do
@@ -17,12 +18,16 @@ defmodule Jido.MCP.Plugins.MCPTest do
       }
     })
 
+    load_pool_from_config()
+
     on_exit(fn ->
       if is_nil(previous) do
         Application.delete_env(:jido_mcp, :endpoints)
       else
         Application.put_env(:jido_mcp, :endpoints, previous)
       end
+
+      load_pool_from_config()
     end)
 
     :ok
@@ -56,8 +61,30 @@ defmodule Jido.MCP.Plugins.MCPTest do
     end
   end
 
-  test "signal routes include default endpoint setter" do
+  test "mount resolves runtime-registered endpoints" do
+    {:ok, endpoint} =
+      Jido.MCP.Endpoint.new(:runtime, %{
+        transport: {:stdio, [command: "echo"]},
+        client_info: %{name: "my_app"}
+      })
+
+    assert {:ok, ^endpoint} = ClientPool.register_endpoint(endpoint)
+
+    assert {:ok, state} =
+             MCP.mount(nil, %{allowed_endpoints: ["runtime"], default_endpoint: "runtime"})
+
+    assert state.allowed_endpoints == [:runtime]
+    assert state.default_endpoint == :runtime
+  end
+
+  test "plugin routes include runtime default endpoint setter" do
     routes = MCP.signal_routes(%{})
     assert {"mcp.endpoint.default.set", Jido.MCP.Actions.SetDefaultEndpoint} in routes
+  end
+
+  defp load_pool_from_config do
+    :sys.replace_state(ClientPool, fn state ->
+      %{state | endpoints: Config.endpoints(), refs: %{}}
+    end)
   end
 end

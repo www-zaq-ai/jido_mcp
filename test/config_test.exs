@@ -3,17 +3,27 @@ defmodule Jido.MCP.ConfigTest do
 
   alias Jido.MCP.Config
 
-  defmodule EndpointLoader do
-    def valid_endpoints do
+  defmodule EndpointSource do
+    def map_endpoints do
       %{
-        github: %{
-          transport: {:stdio, [command: "cat", args: []]},
-          client_info: %{name: "loader_app"}
+        runtime: %{
+          transport: {:stdio, [command: "echo"]},
+          client_info: %{name: "my_app"}
         }
       }
     end
 
-    def invalid_endpoints, do: :invalid
+    def ok_keyword_endpoints do
+      {:ok,
+       [
+         runtime: %{
+           transport: {:stdio, [command: "echo"]},
+           client_info: %{name: "my_app"}
+         }
+       ]}
+    end
+
+    def invalid_endpoints, do: {:error, :boom}
   end
 
   setup do
@@ -58,18 +68,36 @@ defmodule Jido.MCP.ConfigTest do
     end
   end
 
-  test "loads endpoints from an MFA callback" do
-    Application.put_env(:jido_mcp, :endpoints, {EndpointLoader, :valid_endpoints, []})
+  test "loads endpoint config from keyword application config" do
+    Application.put_env(:jido_mcp, :endpoints,
+      runtime: %{
+        transport: {:stdio, [command: "echo"]},
+        client_info: %{name: "my_app"}
+      }
+    )
 
-    assert %{github: endpoint} = Config.endpoints()
-    assert endpoint.id == :github
-    assert endpoint.client_info["name"] == "loader_app"
+    assert %{runtime: endpoint} = Config.endpoints()
+    assert endpoint.id == :runtime
   end
 
-  test "raises when endpoints MFA callback returns invalid data" do
-    Application.put_env(:jido_mcp, :endpoints, {EndpointLoader, :invalid_endpoints, []})
+  test "loads endpoint config from MFA callback returning a map" do
+    Application.put_env(:jido_mcp, :endpoints, {EndpointSource, :map_endpoints, []})
 
-    assert_raise ArgumentError, ~r/MFA callback return/, fn ->
+    assert %{runtime: endpoint} = Config.endpoints()
+    assert endpoint.id == :runtime
+  end
+
+  test "loads endpoint config from MFA callback returning {:ok, keyword}" do
+    Application.put_env(:jido_mcp, :endpoints, {EndpointSource, :ok_keyword_endpoints, []})
+
+    assert %{runtime: endpoint} = Config.endpoints()
+    assert endpoint.id == :runtime
+  end
+
+  test "raises when endpoint config callback returns an invalid value" do
+    Application.put_env(:jido_mcp, :endpoints, {EndpointSource, :invalid_endpoints, []})
+
+    assert_raise ArgumentError, ~r/Invalid endpoints callback return/, fn ->
       Config.endpoints()
     end
   end

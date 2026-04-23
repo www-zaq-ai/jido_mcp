@@ -14,6 +14,8 @@ defmodule Jido.MCP.ActionsTest do
     SetDefaultEndpoint
   }
 
+  alias Jido.MCP.{ClientPool, Config}
+
   setup :set_mimic_from_context
 
   setup do
@@ -30,12 +32,16 @@ defmodule Jido.MCP.ActionsTest do
       }
     })
 
+    load_pool_from_config()
+
     on_exit(fn ->
       if is_nil(previous) do
         Application.delete_env(:jido_mcp, :endpoints)
       else
         Application.put_env(:jido_mcp, :endpoints, previous)
       end
+
+      load_pool_from_config()
     end)
 
     :ok
@@ -145,7 +151,24 @@ defmodule Jido.MCP.ActionsTest do
              ListTools.run(%{endpoint_id: :filesystem}, context)
   end
 
-  test "set default endpoint updates plugin state patch and enforces allowlist" do
+  test "actions resolve runtime-registered endpoints" do
+    {:ok, endpoint} =
+      Jido.MCP.Endpoint.new(:runtime, %{
+        transport: {:stdio, [command: "echo"]},
+        client_info: %{name: "my_app"}
+      })
+
+    assert {:ok, ^endpoint} = ClientPool.register_endpoint(endpoint)
+
+    Mimic.expect(Jido.MCP, :list_tools, fn :runtime, _opts ->
+      {:ok, %{status: :ok, endpoint: :runtime}}
+    end)
+
+    assert {:ok, %{endpoint: :runtime}} =
+             ListTools.run(%{endpoint_id: "runtime"}, %{allowed_endpoints: [:runtime]})
+  end
+
+  test "set default endpoint validates allowlist and supports clearing" do
     assert {:ok, %{mcp: %{default_endpoint: :github}}} =
              SetDefaultEndpoint.run(%{endpoint_id: "github"}, %{allowed_endpoints: [:github]})
 
@@ -157,5 +180,11 @@ defmodule Jido.MCP.ActionsTest do
 
     assert {:ok, %{mcp: %{default_endpoint: nil}}} =
              SetDefaultEndpoint.run(%{}, %{allowed_endpoints: :all})
+  end
+
+  defp load_pool_from_config do
+    :sys.replace_state(ClientPool, fn state ->
+      %{state | endpoints: Config.endpoints(), refs: %{}}
+    end)
   end
 end

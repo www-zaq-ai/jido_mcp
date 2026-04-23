@@ -1,7 +1,7 @@
 defmodule Jido.MCP.Actions.Helpers do
   @moduledoc false
 
-  alias Jido.MCP.{Config, EndpointID}
+  alias Jido.MCP.{ClientPool, EndpointID}
 
   @spec resolve_endpoint_id(map(), map()) :: {:ok, atom()} | {:error, term()}
   def resolve_endpoint_id(params, context) do
@@ -25,11 +25,10 @@ defmodule Jido.MCP.Actions.Helpers do
 
   @spec normalize_endpoint_id(term()) ::
           {:ok, atom()} | {:error, :endpoint_required | :invalid_endpoint_id | :unknown_endpoint}
-  def normalize_endpoint_id(id), do: EndpointID.resolve(id)
+  def normalize_endpoint_id(id), do: ClientPool.resolve_endpoint_id(id)
 
   @spec validate_allowed_endpoint(atom(), map()) :: :ok | {:error, term()}
-  def validate_allowed_endpoint(endpoint_id, context)
-      when is_atom(endpoint_id) and is_map(context) do
+  def validate_allowed_endpoint(endpoint_id, context) do
     allowed =
       first_present([
         context[:allowed_endpoints],
@@ -58,7 +57,7 @@ defmodule Jido.MCP.Actions.Helpers do
   defp normalize_allowed_endpoints(:all), do: {:ok, :all}
 
   defp normalize_allowed_endpoints(values) when is_list(values) do
-    endpoints = Config.active_endpoints()
+    endpoints = ClientPool.endpoints()
 
     values
     |> Enum.reduce_while({:ok, []}, fn value, {:ok, acc} ->
