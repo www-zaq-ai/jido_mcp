@@ -6,7 +6,7 @@ defmodule Jido.MCP.EndpointID do
   @type resolve_error :: :endpoint_required | :invalid_endpoint_id | :unknown_endpoint
 
   @spec resolve(term()) :: {:ok, atom()} | {:error, resolve_error()}
-  def resolve(value), do: resolve(value, Config.active_endpoints())
+  def resolve(value), do: resolve(value, Config.endpoints())
 
   @spec resolve(term(), map()) :: {:ok, atom()} | {:error, resolve_error()}
   def resolve(nil, _endpoints), do: {:error, :endpoint_required}
