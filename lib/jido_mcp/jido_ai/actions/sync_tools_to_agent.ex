@@ -55,7 +55,7 @@ defmodule Jido.MCP.JidoAI.Actions.SyncToolsToAgent do
       {registered, failed, target_agent} =
         register_modules(params[:agent_server], modules, target_agent)
 
-      skipped_failures = Enum.map(skipped, &{&1.tool_name, &1.reason})
+      skipped_failures = Enum.map(skipped, &%{&1.tool_name => &1.reason})
       failed = skipped_failures ++ failed
 
       ProxyRegistry.put(params[:agent_server], endpoint_id, registered)
