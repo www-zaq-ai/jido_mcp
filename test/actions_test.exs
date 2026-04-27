@@ -204,7 +204,7 @@ defmodule Jido.MCP.ActionsTest do
     assert {:ok, %{endpoint_id: :runtime, registered: true, status: :ok}} =
              RegisterEndpoint.run(%{endpoint_id: "runtime", endpoint: attrs}, %{})
 
-    assert {:ok, %Jido.MCP.Endpoint{id: :runtime}} =
+    assert {:ok, %{endpoint_id: :runtime, registered: false, status: :ok}} =
              UnregisterEndpoint.run(%{endpoint_id: "github"}, %{})
   end
 
