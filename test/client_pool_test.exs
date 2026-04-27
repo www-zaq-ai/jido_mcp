@@ -3,6 +3,43 @@ defmodule Jido.MCP.ClientPoolTest do
 
   alias Jido.MCP.{ClientPool, Endpoint}
 
+  defmodule ReadyClient do
+    use GenServer
+
+    def start_link(capabilities) do
+      GenServer.start_link(__MODULE__, capabilities)
+    end
+
+    @impl true
+    def init(capabilities), do: {:ok, capabilities}
+
+    @impl true
+    def handle_call(:get_server_capabilities, _from, [nil | rest]) do
+      {:reply, nil, rest}
+    end
+
+    def handle_call(:get_server_capabilities, _from, [capabilities | rest]) do
+      {:reply, capabilities, rest}
+    end
+
+    def handle_call(:get_server_capabilities, _from, capabilities) do
+      {:reply, capabilities, capabilities}
+    end
+
+    def handle_call(:await_ready, _from, [nil, capabilities | rest]) do
+      {:reply, :ok, [capabilities | rest]}
+    end
+
+    def handle_call(:await_ready, _from, capabilities) when is_map(capabilities) do
+      {:reply, :ok, capabilities}
+    end
+
+    def handle_call(:await_ready, _from, nil) do
+      Process.sleep(100)
+      {:reply, :ok, nil}
+    end
+  end
+
   setup do
     {:ok, endpoint} =
       Endpoint.new(:github, %{
@@ -97,5 +134,52 @@ defmodule Jido.MCP.ClientPoolTest do
     refute status.client_alive?
     refute status.supervisor_alive?
     refute status.transport_alive?
+  end
+
+  test "restarts tracked endpoints when transport ref is stale" do
+    {:ok, endpoint} =
+      Endpoint.new(:github, %{
+        transport: {:stdio, [command: "cat"]},
+        client_info: %{name: "my_app"}
+      })
+
+    client = start_supervised!({ReadyClient, %{}})
+    supervisor = start_supervised!({Agent, fn -> nil end})
+    stale_ref = %{client: client, supervisor: supervisor, transport: :missing_mcp_transport}
+
+    :sys.replace_state(ClientPool, fn state ->
+      %{
+        state
+        | endpoints: %{github: endpoint},
+          refs: %{github: stale_ref}
+      }
+    end)
+
+    assert {:ok, ^endpoint, ref} = ClientPool.ensure_client(:github)
+    refute ref == stale_ref
+    refute ref.transport == :missing_mcp_transport
+
+    on_exit(fn ->
+      if Process.alive?(ref.supervisor) do
+        DynamicSupervisor.terminate_child(Jido.MCP.ClientSupervisor, ref.supervisor)
+      end
+    end)
+  end
+
+  test "await_ready waits until server capabilities are available" do
+    client = start_supervised!({ReadyClient, [nil, %{"tools" => %{}}]})
+
+    assert :ok = ClientPool.await_ready(%{client: client}, 250)
+  end
+
+  test "await_ready returns client_not_ready when capabilities never arrive" do
+    client = start_supervised!({ReadyClient, nil})
+
+    assert {:error, :client_not_ready} = ClientPool.await_ready(%{client: client}, 30)
+  end
+
+  test "await_ready returns client_not_started when the client ref is stale" do
+    assert {:error, :client_not_started} =
+             ClientPool.await_ready(%{client: :missing_mcp_client}, 30)
   end
 end

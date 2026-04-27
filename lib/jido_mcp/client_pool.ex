@@ -26,6 +26,17 @@ defmodule Jido.MCP.ClientPool do
     GenServer.call(__MODULE__, {:ensure_client, endpoint_id})
   end
 
+  @spec await_ready(client_ref(), timeout()) :: :ok | {:error, term()}
+  def await_ready(%{client: client}, timeout \\ 5_000) do
+    case resolve_name(client) do
+      pid when is_pid(pid) ->
+        anubis_await_ready(client, timeout)
+
+      _ ->
+        {:error, :client_not_started}
+    end
+  end
+
   @spec register_endpoint(Endpoint.t()) ::
           {:ok, Endpoint.t()}
           | {:error, {:endpoint_already_registered, atom()} | {:invalid_endpoint, term()}}
@@ -170,7 +181,8 @@ defmodule Jido.MCP.ClientPool do
   defp ensure_started(endpoint_id, endpoint, state) do
     case Map.fetch(state.refs, endpoint_id) do
       {:ok, ref} ->
-        if process_alive?(ref.client) and process_alive?(ref.supervisor) do
+        if process_alive?(ref.client) and process_alive?(ref.supervisor) and
+             process_alive?(ref.transport) do
           {:ok, ref, state}
         else
           start_endpoint(endpoint_id, endpoint, state)
@@ -183,25 +195,7 @@ defmodule Jido.MCP.ClientPool do
 
   defp start_endpoint(endpoint_id, endpoint, state) do
     ref = names_for(endpoint_id)
-
-    child_spec = %{
-      id: {:mcp_client, endpoint_id},
-      start:
-        {Anubis.Client.Supervisor, :start_link,
-         [
-           [
-             name: ref.client,
-             transport_name: ref.transport,
-             transport: endpoint.transport,
-             client_info: endpoint.client_info,
-             capabilities: endpoint.capabilities,
-             protocol_version: endpoint.protocol_version
-           ]
-         ]},
-      type: :supervisor,
-      restart: :transient,
-      shutdown: 10_000
-    }
+    child_spec = child_spec(endpoint_id, endpoint, ref)
 
     case DynamicSupervisor.start_child(@supervisor, child_spec) do
       {:ok, pid} ->
@@ -241,6 +235,59 @@ defmodule Jido.MCP.ClientPool do
       client: {:via, Registry, {@registry, {:client, endpoint_id}}},
       transport: {:via, Registry, {@registry, {:transport, endpoint_id}}}
     }
+  end
+
+  defp child_spec(endpoint_id, %{transport: {:stdio, transport_opts}} = endpoint, ref) do
+    client_opts = [
+      transport: [layer: Anubis.Transport.STDIO, name: ref.transport],
+      client_info: endpoint.client_info,
+      capabilities: endpoint.capabilities,
+      protocol_version: endpoint.protocol_version,
+      name: ref.client
+    ]
+
+    children = [
+      %{id: Anubis.Client, start: {Anubis.Client, :start_link_server, [client_opts]}},
+      {Jido.MCP.Transport.STDIO, transport_opts ++ [name: ref.transport, client: ref.client]}
+    ]
+
+    %{
+      id: {:mcp_client, endpoint_id},
+      start:
+        {Supervisor, :start_link, [children, [strategy: :one_for_all, name: ref.supervisor]]},
+      type: :supervisor,
+      restart: :transient,
+      shutdown: 10_000
+    }
+  end
+
+  defp child_spec(endpoint_id, endpoint, ref) do
+    %{
+      id: {:mcp_client, endpoint_id},
+      start:
+        {Anubis.Client.Supervisor, :start_link,
+         [
+           [
+             name: ref.client,
+             transport_name: ref.transport,
+             transport: endpoint.transport,
+             client_info: endpoint.client_info,
+             capabilities: endpoint.capabilities,
+             protocol_version: endpoint.protocol_version
+           ]
+         ]},
+      type: :supervisor,
+      restart: :transient,
+      shutdown: 10_000
+    }
+  end
+
+  defp anubis_await_ready(client, timeout) do
+    Anubis.Client.await_ready(client, timeout: timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :client_not_ready}
+    :exit, {:noproc, _} -> {:error, :client_not_started}
+    :exit, reason -> {:error, reason}
   end
 
   defp process_alive?(name) do
